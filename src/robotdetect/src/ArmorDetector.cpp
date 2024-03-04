@@ -30,48 +30,109 @@ cv::Mat ArmorDetector::preprocessImage(const cv::Mat & rgb_img)
     return binary_img;
 }
 
-std::vector<Light> ArmorDetector::findLights(const cv::Mat & rbg_img, const cv::Mat & binary_img)
-{
-  using std::vector;
-  vector<vector<cv::Point>> contours;
-  vector<cv::Vec4i> hierarchy;
-  cv::findContours(binary_img, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+std::vector<Light> ArmorDetector::findLights(const cv::Mat &rbg_img, const cv::Mat &binary_img) {
+    using std::vector;
+    vector<vector<cv::Point>> contours;
+    vector<cv::Vec4i> hierarchy;
+    cv::findContours(binary_img, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-  vector<Light> lights;
+    vector<Light> lights;
 
-  for (const auto & contour : contours) {
-    if (contour.size() < 5) continue;
+    for (const auto &contour : contours) {
+        if (contour.size() < 5) continue;
 
-    auto r_rect = cv::minAreaRect(contour);
-    auto light = Light(r_rect);
+        auto r_rect = cv::minAreaRect(contour);
+        auto light = Light(r_rect);
 
-    if (isLight(light)) {
-      auto rect = light.boundingRect();
-      if (  // Avoid assertion failed
-        0 <= rect.x && 0 <= rect.width && rect.x + rect.width <= rbg_img.cols && 0 <= rect.y &&
-        0 <= rect.height && rect.y + rect.height <= rbg_img.rows) {
-        int sum_r = 0, sum_b = 0;
-        auto roi = rbg_img(rect);
-        // Iterate through the ROI
-        for (int i = 0; i < roi.rows; i++) {
-          for (int j = 0; j < roi.cols; j++) {
-            if (cv::pointPolygonTest(contour, cv::Point2f(j + rect.x, i + rect.y), false) >= 0) {
-              // if point is inside contour bgr
-              sum_b += roi.at<cv::Vec3b>(i, j)[0];
-              sum_r += roi.at<cv::Vec3b>(i, j)[2];
+        if (isLight(light)) {
+            auto rect = light.boundingRect();
+            if (  // Avoid assertion failed
+                0 <= rect.x && 0 <= rect.width && rect.x + rect.width <= rbg_img.cols && 0 <= rect.y &&
+                0 <= rect.height && rect.y + rect.height <= rbg_img.rows) {
+                // int sum_r = 0, sum_b = 0;
+                // auto roi = rbg_img(rect);
+                // // Iterate through the ROI
+                // for (int i = 0; i < roi.rows; i++) {
+                //     for (int j = 0; j < roi.cols; j++) {
+                //         if (cv::pointPolygonTest(contour, cv::Point2f(j + rect.x, i + rect.y), false) >= 0) {
+                //             // if point is inside contour bgr
+                //             sum_b += roi.at<cv::Vec3b>(i, j)[0];
+                //             sum_r += roi.at<cv::Vec3b>(i, j)[2];
+                //         }
+                //     }
+                // }
+                // // Sum of red pixels > sum of blue pixels ?
+                // light.color = sum_r > sum_b ? RED : BLUE;
+                // // cv::Point2f predictedPos = updateKalmanFilter(cv::Point2f(light.center.x, light.center.y));
+                // lights.emplace_back(light);
+                auto roi = rbg_img(rect);
+
+                // 转换颜色空间到HSV
+                cv::Mat hsv_roi;
+                cv::cvtColor(roi, hsv_roi, cv::COLOR_BGR2HSV);
+
+                // 设置HSV颜色阈值，这里可以根据实际情况进行调整
+                cv::Scalar lower_red_hsv(0, 150, 150);
+                cv::Scalar upper_red_hsv(10, 255, 255);
+                cv::Scalar lower_blue_hsv(100, 150, 150);
+                cv::Scalar upper_blue_hsv(140, 255, 255);
+
+                // 在HSV空间中判断颜色
+                cv::Mat red_mask, blue_mask;
+                cv::inRange(hsv_roi, lower_red_hsv, upper_red_hsv, red_mask);
+                cv::inRange(hsv_roi, lower_blue_hsv, upper_blue_hsv, blue_mask);
+
+                // 使用形态学操作改善颜色区域
+                cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+                cv::morphologyEx(red_mask, red_mask, cv::MORPH_CLOSE, kernel);
+                cv::morphologyEx(blue_mask, blue_mask, cv::MORPH_CLOSE, kernel);
+
+                int red_count = cv::countNonZero(red_mask);
+                int blue_count = cv::countNonZero(blue_mask);
+
+                // 判断颜色
+                light.color = red_count > blue_count ? RED : BLUE;
+                lights.emplace_back(light);
             }
-          }
         }
-        // Sum of red pixels > sum of blue pixels ?
-        light.color = sum_r > sum_b ? RED : BLUE;
-        cv::Point2f predictedPos = updateKalmanFilter(cv::Point2f(light.center.x, light.center.y));
-        lights.emplace_back(light);
-      }
     }
-  }
 
-  return lights;
+    // // 使用光流法估计灯条的运动
+    // if (!prevPoints.empty() && !prevGrayImg.empty()) {
+    //     cv::Mat currGrayImg;
+    //     cv::cvtColor(rbg_img, currGrayImg, cv::COLOR_RGB2GRAY);
+
+    //     std::vector<cv::Point2f> currPoints;
+    //     for (const auto &light : lights) {
+    //         currPoints.push_back(light.center);
+    //     }
+
+    //     std::vector<cv::Point2f> trackedPoints;
+    //     std::vector<uchar> status;
+    //     std::vector<float> err;
+    //     cv::calcOpticalFlowPyrLK(prevGrayImg, currGrayImg, prevPoints, trackedPoints, status, err);
+
+    //     // 更新灯条位置
+    //     for (size_t i = 0; i < lights.size(); ++i) {
+    //         if (status[i]) {
+    //             lights[i].center = trackedPoints[i];
+    //         }
+    //     }
+
+    //     prevGrayImg = currGrayImg.clone();
+    //     prevPoints = currPoints;
+    // } else {
+    //     // 如果没有上一帧的信息，直接使用当前帧的灰度图像
+    //     cv::cvtColor(rbg_img, prevGrayImg, cv::COLOR_RGB2GRAY);
+    //     prevPoints.clear();
+    //     for (const auto &light : lights) {
+    //         prevPoints.push_back(light.center);
+    //     }
+    // }
+
+    return lights;
 }
+
 
 bool ArmorDetector::isLight(const Light & light)
 {
