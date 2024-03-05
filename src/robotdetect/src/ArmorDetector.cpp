@@ -1,4 +1,10 @@
 #include "ArmorDetector.hpp"
+// 在ArmorDetector类定义之外定义detectHarrisCorners函数
+std::vector<cv::Point2f> detectHarrisCorners(const cv::Mat &grayImg, int maxCorners = 100, double qualityLevel = 0.01, double minDistance = 10) {
+    std::vector<cv::Point2f> corners;
+    cv::goodFeaturesToTrack(grayImg, corners, maxCorners, qualityLevel, minDistance, cv::Mat(), 3, true);
+    return corners;
+}
 
 std::vector<Armor> ArmorDetector::work(const cv::Mat &input)
 {
@@ -49,22 +55,6 @@ std::vector<Light> ArmorDetector::findLights(const cv::Mat &rbg_img, const cv::M
             if (  // Avoid assertion failed
                 0 <= rect.x && 0 <= rect.width && rect.x + rect.width <= rbg_img.cols && 0 <= rect.y &&
                 0 <= rect.height && rect.y + rect.height <= rbg_img.rows) {
-                // int sum_r = 0, sum_b = 0;
-                // auto roi = rbg_img(rect);
-                // // Iterate through the ROI
-                // for (int i = 0; i < roi.rows; i++) {
-                //     for (int j = 0; j < roi.cols; j++) {
-                //         if (cv::pointPolygonTest(contour, cv::Point2f(j + rect.x, i + rect.y), false) >= 0) {
-                //             // if point is inside contour bgr
-                //             sum_b += roi.at<cv::Vec3b>(i, j)[0];
-                //             sum_r += roi.at<cv::Vec3b>(i, j)[2];
-                //         }
-                //     }
-                // }
-                // // Sum of red pixels > sum of blue pixels ?
-                // light.color = sum_r > sum_b ? RED : BLUE;
-                // // cv::Point2f predictedPos = updateKalmanFilter(cv::Point2f(light.center.x, light.center.y));
-                // lights.emplace_back(light);
                 auto roi = rbg_img(rect);
 
                 // 转换颜色空间到HSV
@@ -97,41 +87,43 @@ std::vector<Light> ArmorDetector::findLights(const cv::Mat &rbg_img, const cv::M
         }
     }
 
-    // // 使用光流法估计灯条的运动
-    // if (!prevPoints.empty() && !prevGrayImg.empty()) {
-    //     cv::Mat currGrayImg;
-    //     cv::cvtColor(rbg_img, currGrayImg, cv::COLOR_RGB2GRAY);
+    // 使用光流法估计灯条的运动
+    if (!prevGrayImg.empty()) {
+        cv::Mat currGrayImg;
+        cv::cvtColor(rbg_img, currGrayImg, cv::COLOR_RGB2GRAY);
 
-    //     std::vector<cv::Point2f> currPoints;
-    //     for (const auto &light : lights) {
-    //         currPoints.push_back(light.center);
-    //     }
+        if (prevPoints.empty()) {
+            // 使用Harris角点检测
+            prevPoints = detectHarrisCorners(prevGrayImg);
+        }
 
-    //     std::vector<cv::Point2f> trackedPoints;
-    //     std::vector<uchar> status;
-    //     std::vector<float> err;
-    //     cv::calcOpticalFlowPyrLK(prevGrayImg, currGrayImg, prevPoints, trackedPoints, status, err);
+        std::vector<cv::Point2f> trackedPoints;
+        std::vector<uchar> status;
+        std::vector<float> err;
+        cv::calcOpticalFlowPyrLK(prevGrayImg, currGrayImg, prevPoints, trackedPoints, status, err);
 
-    //     // 更新灯条位置
-    //     for (size_t i = 0; i < lights.size(); ++i) {
-    //         if (status[i]) {
-    //             lights[i].center = trackedPoints[i];
-    //         }
-    //     }
+        // 更新灯条位置
+        for (size_t i = 0; i < lights.size(); ++i) {
+            if (status[i]) {
+                // 多帧融合
+                float alpha = 0.5; // 加权系数，可以根据需要调整
+                cv::Point2f fusedPoint = alpha * trackedPoints[i] + (1 - alpha) * cv::Point2f(lights[i].center.x, lights[i].center.y);
+                lights[i].center = fusedPoint;
+            }
+        }
 
-    //     prevGrayImg = currGrayImg.clone();
-    //     prevPoints = currPoints;
-    // } else {
-    //     // 如果没有上一帧的信息，直接使用当前帧的灰度图像
-    //     cv::cvtColor(rbg_img, prevGrayImg, cv::COLOR_RGB2GRAY);
-    //     prevPoints.clear();
-    //     for (const auto &light : lights) {
-    //         prevPoints.push_back(light.center);
-    //     }
-    // }
+        prevGrayImg = currGrayImg.clone();
+        prevPoints = trackedPoints;
+    } else {
+        // 如果没有上一帧的信息，直接使用当前帧的灰度图像
+        cv::cvtColor(rbg_img, prevGrayImg, cv::COLOR_RGB2GRAY);
+        prevPoints.clear();
+        prevPoints = detectHarrisCorners(prevGrayImg);
+    }
 
     return lights;
 }
+
 
 
 bool ArmorDetector::isLight(const Light & light)
