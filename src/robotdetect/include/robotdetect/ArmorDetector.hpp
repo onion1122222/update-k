@@ -19,6 +19,8 @@ private:
     void initKalmanFilter();
     // 更新卡尔曼滤波器
     cv::Point2f updateKalmanFilter(const cv::Point2f &measurement);
+    cv::Mat prevGrayImg;          // 上一帧的灰度图像
+    std::vector<cv::Point2f> prevPoints;  // 上一帧检测到的灯条中心点
 public:
     int binary_thres;
     int detect_color;
